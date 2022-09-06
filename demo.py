@@ -2,6 +2,7 @@ import click, os, glob, os.path as osp
 import json
 import numpy as np
 import cv2
+from natsort import natsorted
 from termcolor import colored
 import albumentations as A
 import segmentation_models_pytorch as smp
@@ -24,9 +25,8 @@ class FFHQ_Dataset(Dataset):
         self.train = train
         if train:
             self.fps = []
-            for scene in os.listdir(data_path):
-                if scene in self.test_scenes:
-                    continue
+            self.train_scenes = [s for s in natsorted(os.listdir(data_path)) if s not in self.test_scenes]
+            for scene in self.train_scenes:
                 for fp in glob.glob(osp.join(data_path, scene, "*.png")):
                     self.fps.append(fp)
         else:
