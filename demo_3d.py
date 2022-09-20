@@ -29,12 +29,12 @@ class ToothDataset(Dataset):
             for scene in os.listdir(data_path):
                 if scene in self.test_scenes:
                     continue
-                for fp in glob.glob(osp.join(data_path, scene, "*/35._Crown.stl")):
+                for fp in glob.glob(osp.join(data_path, scene, "*/3*._Crown.stl")):
                     self.fps.append(fp)
         else:
             self.fps = []
             for scene in self.test_scenes:
-                for fp in glob.glob(osp.join(data_path, scene, "*/35._Crown.stl")):
+                for fp in glob.glob(osp.join(data_path, scene, "*/3*._Crown.stl")):
                     self.fps.append(fp)
             self.quaternion = np.random.rand(len(self.fps), 4)  # (N, 4)
             self.quaternion /= np.linalg.norm(self.quaternion, axis=1, keepdims=True)
@@ -52,7 +52,7 @@ class ToothDataset(Dataset):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
         x = np.concatenate([m.vertices, m.vertex_normals], axis=1).astype('f4')
-        idx = np.random.choice(np.arange(len(x)), 1024, replace=False)
+        idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
         x = x[idx]
         tid = int(osp.basename(fp)[:2])
 
@@ -68,7 +68,7 @@ class ToothDataset(Dataset):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
         x = np.concatenate([m.vertices, m.vertex_normals], axis=1).astype('f4')
-        idx = np.random.choice(np.arange(len(x)), 1024, replace=False)
+        idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
         x = x[idx]
         tid = int(osp.basename(fp)[:2])
 
@@ -130,9 +130,9 @@ class LitModel(pl.LightningModule):
 
 @click.command()
 @click.option('--epoch', default=1000)
-@click.option('--batch_size', default=1)
+@click.option('--batch_size', default=16)
 @click.option('--lr', default=1e-3)
-@click.option('--num_workers', default=0)
+@click.option('--num_workers', default=4)
 def run(**kwargs):
     print(colored(json.dumps(kwargs, indent=2), 'blue'))
 
