@@ -51,6 +51,7 @@ class ToothDataset(Dataset):
     def get_train_data(self, i):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
+        m.vertices -= m.vertices.mean(0)
         x = np.concatenate([m.vertices, m.vertex_normals], axis=1).astype('f4')
         idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
         x = x[idx]
@@ -67,6 +68,7 @@ class ToothDataset(Dataset):
     def get_test_data(self, i):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
+        m.vertices -= m.vertices.mean(0)
         x = np.concatenate([m.vertices, m.vertex_normals], axis=1).astype('f4')
         idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
         x = x[idx]
@@ -116,7 +118,7 @@ class LitModel(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.net.parameters())
-        schedular = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+        schedular = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
         return [optimizer], [schedular]
 
     def train_dataloader(self):
