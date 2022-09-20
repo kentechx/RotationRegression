@@ -21,7 +21,7 @@ from models.my_dgcnn import MyDGCNN_Cls
 class ToothDataset(Dataset):
     test_scenes = ['1801_2000', '2001_2175']
 
-    def __init__(self, data_path="/home/kent/Datasets/step_data/data2000_20200810",
+    def __init__(self, data_path="/mnt/datasets/tooth/step_tooth",
                  train=True):
         self.train = train
         if train:
@@ -83,7 +83,7 @@ class ToothDataset(Dataset):
 
 class LitModel(pl.LightningModule):
 
-    def __init__(self, batch_size, lr, num_workers):
+    def __init__(self, epochs, batch_size, lr, num_workers):
         super().__init__()
         self.save_hyperparameters()
         args = type('', (), {})()
@@ -95,7 +95,7 @@ class LitModel(pl.LightningModule):
         args.n_edgeconvs_backbone = 3
         args.edgeconv_channels = [64, 64, 64]
         args.emb_dims = 1024
-        args.norm = "instance"
+        args.norm = "batch"
         args.dropout = 0.
         self.net = MyDGCNN_Cls(args)
 
@@ -118,8 +118,10 @@ class LitModel(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.net.parameters())
-        schedular = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
-        return [optimizer], [schedular]
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, total_steps=self.hparams.epochs * len(self.train_dataloader()), max_lr=self.hparams.lr,
+            pct_start=0.1, div_factor=10, final_div_factor=100)
+        return [optimizer], [{'scheduler': scheduler, 'interval': 'step'}]
 
     def train_dataloader(self):
         return DataLoader(ToothDataset(train=True), batch_size=self.hparams.batch_size,
@@ -131,8 +133,8 @@ class LitModel(pl.LightningModule):
 
 
 @click.command()
-@click.option('--epoch', default=1000)
-@click.option('--batch_size', default=16)
+@click.option('--epoch', default=20)
+@click.option('--batch_size', default=64)
 @click.option('--lr', default=1e-3)
 @click.option('--num_workers', default=4)
 def run(**kwargs):
@@ -141,14 +143,14 @@ def run(**kwargs):
     pl.seed_everything(42)
 
     # logger
-    version = 'demo_3d'
+    version = 'demo_3d2'
     logger = TensorBoardLogger("work_dir", name="demo", version=version)
 
     # trainer
     debug = False
     debug_args = {'limit_train_batches': 10, "limit_val_batches": 10} if debug else {}
 
-    model = LitModel(kwargs['batch_size'], kwargs['lr'], kwargs['num_workers'])
+    model = LitModel(kwargs['epoch'], kwargs['batch_size'], kwargs['lr'], kwargs['num_workers'])
     callback = ModelCheckpoint(save_last=True)
     trainer = pl.Trainer(logger, accelerator='gpu', max_epochs=kwargs["epoch"], callbacks=[callback], **debug_args)
 
