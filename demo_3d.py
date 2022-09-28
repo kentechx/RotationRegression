@@ -44,9 +44,7 @@ class ToothDataset(Dataset):
                     if tid % 10 >= 8:
                         continue
                     self.fps.append(fp)
-            # uniformly sample 4d unit vector
-            self.quaternion = np.random.randn(len(self.fps), 4)  # (N, 4)
-            self.quaternion /= np.linalg.norm(self.quaternion, axis=1, keepdims=True)
+            self.mat = Rotation.random(len(self.fps)).as_matrix().astype('f4')
 
     def __len__(self):
         return len(self.fps)
@@ -67,10 +65,7 @@ class ToothDataset(Dataset):
         # x = x[idx]
         tid = int(osp.basename(fp)[:2])
 
-        # uniformly sample 4d unit vector
-        quaternion = np.random.randn(4)  # (N, 4)
-        quaternion /= np.linalg.norm(quaternion)
-        mat = Rotation.from_quat(quaternion).as_matrix().astype('f4')
+        mat = Rotation.random().as_matrix().astype('f4')
         x[:, :3] = x[:, :3] @ mat.T
         x[:, 3:] = x[:, 3:] @ mat.T
 
@@ -86,7 +81,7 @@ class ToothDataset(Dataset):
         # x = x[idx]
         tid = int(osp.basename(fp)[:2])
 
-        mat = Rotation.from_quat(self.quaternion[i]).as_matrix().astype('f4')
+        mat = self.mat[i]
         x[:, :3] = x[:, :3] @ mat.T
         x[:, 3:] = x[:, 3:] @ mat.T
 
@@ -114,10 +109,6 @@ class LitModel(pl.LightningModule):
     def forward(self, x, pts):
         return self.net(x, pts)
 
-    def matrix_loss(self, pred, y):
-        pred_z = torch.cross(pred[:, :3], pred[:, 3:], dim=1)
-        return F.mse_loss(pred_z, y[:, 6:]) + F.mse_loss(pred, y[:, :6]) * 2
-
     def angle_diff(self, pred, y):
         rot_pred = torch.zeros((len(pred), 3, 3), device=pred.device)
         rot_pred[:, :, 0] = pred[:, :3]
@@ -135,14 +126,15 @@ class LitModel(pl.LightningModule):
         rot_y[:, :, 2] = y[:, 6:]
         rot = torch.bmm(rot_pred, rot_y.transpose(1, 2))
         angle = torch.clip((rot.diagonal(dim1=1, dim2=2).sum(-1) - 1.) / 2., -1, 1).acos() * 180 / np.pi
-        return angle.mean()
+        return angle.mean(), angle.max()
 
     def training_step(self, batch, batch_idx):
         X, y, tid, fp = batch
         pred, _ = self(X, X[:, :3].clone())
-        loss = self.matrix_loss(pred, y)
-        angle = self.angle_diff(pred, y)
-        self.log("angle_diff", angle, prog_bar=True, batch_size=self.hparams['batch_size'])
+        loss = F.mse_loss(pred, y[:, :6])
+        angle_mean, angle_max = self.angle_diff(pred, y)
+        self.log("angle_diff", angle_mean, prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("angle_diff_max", angle_max, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("loss", loss, batch_size=self.hparams['batch_size'])
         self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"])
         return loss
@@ -150,9 +142,10 @@ class LitModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         X, y, tid, fp = batch
         pred, _ = self(X, X[:, :3].clone())
-        loss = self.matrix_loss(pred, y)
-        angle = self.angle_diff(pred, y)
-        self.log("val_angle_diff", angle, prog_bar=True, batch_size=self.hparams['batch_size'])
+        loss = F.mse_loss(pred, y[:, :6])
+        angle_mean, angle_max = self.angle_diff(pred, y)
+        self.log("val_angle_diff", angle_mean, prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("val_angle_diff_max", angle_max, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("val_loss", loss, prog_bar=True, batch_size=self.hparams['batch_size'])
 
     def configure_optimizers(self):
@@ -173,11 +166,11 @@ class LitModel(pl.LightningModule):
 
 @click.command()
 @click.option('--epoch', default=20)
-@click.option('--batch_size', default=20)
+@click.option('--batch_size', default=64)
 @click.option('--lr', default=1e-3)
 @click.option('--num_pts', default=1024)
 @click.option('--num_workers', default=4)
-@click.option('--version', default='demo_3d_3')
+@click.option('--version', default='demo_3d_5')
 def run(**kwargs):
     print(colored(json.dumps(kwargs, indent=2), 'blue'))
 
