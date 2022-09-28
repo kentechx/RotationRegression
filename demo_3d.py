@@ -21,7 +21,7 @@ from models.my_dgcnn import MyDGCNN_Cls
 class ToothDataset(Dataset):
     test_scenes = ['1801_2000', '2001_2175']
 
-    def __init__(self, data_path="/mnt/datasets/tooth/step_tooth",
+    def __init__(self, data_path="/home/kent/Datasets/step_data/data2000_20200810",
                  train=True):
         self.train = train
         if train:
@@ -30,11 +30,17 @@ class ToothDataset(Dataset):
                 if scene in self.test_scenes:
                     continue
                 for fp in glob.glob(osp.join(data_path, scene, "*/3*._Crown.stl")):
+                    tid = int(osp.basename(fp)[:2])
+                    if tid % 10 >= 8:
+                        continue
                     self.fps.append(fp)
         else:
             self.fps = []
             for scene in self.test_scenes:
                 for fp in glob.glob(osp.join(data_path, scene, "*/3*._Crown.stl")):
+                    tid = int(osp.basename(fp)[:2])
+                    if tid % 10 >= 8:
+                        continue
                     self.fps.append(fp)
             self.quaternion = np.random.rand(len(self.fps), 4)  # (N, 4)
             self.quaternion /= np.linalg.norm(self.quaternion, axis=1, keepdims=True)
@@ -63,7 +69,7 @@ class ToothDataset(Dataset):
         x[:, :3] = x[:, :3] @ mat.T
         x[:, 3:] = x[:, 3:] @ mat.T
 
-        return x.T, quaternion, tid, fp
+        return x.T, mat[:, :2].T.reshape(-1), tid, fp
 
     def get_test_data(self, i):
         fp = self.fps[i]
@@ -78,7 +84,7 @@ class ToothDataset(Dataset):
         x[:, :3] = x[:, :3] @ mat.T
         x[:, 3:] = x[:, 3:] @ mat.T
 
-        return x.T, self.quaternion[i], tid, fp
+        return x.T, mat[:, :2].T.reshape(-1), tid, fp
 
 
 class LitModel(pl.LightningModule):
@@ -91,7 +97,7 @@ class LitModel(pl.LightningModule):
         args.dynamic = True
         args.use_stn = False
         args.input_channels = 6
-        args.output_channels = 4
+        args.output_channels = 6
         args.n_edgeconvs_backbone = 3
         args.edgeconv_channels = [64, 64, 64]
         args.emb_dims = 1024
@@ -102,10 +108,30 @@ class LitModel(pl.LightningModule):
     def forward(self, x):
         return self.net(x)
 
+    def angle_diff(self, pred, y):
+        rot_pred = torch.zeros((len(pred), 3, 3), device=pred.device)
+        rot_pred[:, :, 0] = pred[:, :3]
+        rot_pred[:, :, 1] = pred[:, 3:]
+        rot_pred[:, :, 2] = torch.cross(pred[:, :3], pred[:, 3:], dim=1)
+        rot_pred[:, :, 2] /= torch.norm(rot_pred[:, :, 2], dim=1, keepdim=True) + 1e-8
+        rot_pred[:, :, 1] = torch.cross(rot_pred[:, :, 2], rot_pred[:, :, 0], dim=1)
+        rot_pred[:, :, 1] /= torch.norm(rot_pred[:, :, 1], dim=1, keepdim=True) + 1e-8
+        rot_pred[:, :, 0] /= torch.norm(rot_pred[:, :, 0], dim=1, keepdim=True) + 1e-8
+
+        rot_y = torch.zeros((len(y), 3, 3), device=y.device)
+        rot_y[:, :, 0] = y[:, :3]
+        rot_y[:, :, 1] = y[:, 3:]
+        rot_y[:, :, 2] = torch.cross(y[:, :3], y[:, 3:], dim=1)
+        rot = torch.bmm(rot_pred, rot_y.transpose(1, 2))
+        angle = torch.clip((rot.diagonal(dim1=1, dim2=2).sum(-1) - 1.) / 2., -1, 1).acos() * 180 / np.pi
+        return angle.mean()
+
     def training_step(self, batch, batch_idx):
         X, y, tid, fp = batch
         pred, _ = self(X)
-        loss = F.l1_loss(pred, y)
+        loss = F.mse_loss(pred, y)
+        angle = self.angle_diff(pred, y)
+        self.log("angle_diff", angle, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("loss", loss, batch_size=self.hparams['batch_size'])
         self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"])
         return loss
@@ -113,7 +139,9 @@ class LitModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         X, y, tid, fp = batch
         pred, _ = self(X)
-        loss = F.l1_loss(pred, y)
+        loss = F.mse_loss(pred, y)
+        angle = self.angle_diff(pred, y)
+        self.log("val_angle_diff", angle, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("val_loss", loss, prog_bar=True, batch_size=self.hparams['batch_size'])
 
     def configure_optimizers(self):
@@ -134,7 +162,7 @@ class LitModel(pl.LightningModule):
 
 @click.command()
 @click.option('--epoch', default=20)
-@click.option('--batch_size', default=64)
+@click.option('--batch_size', default=20)
 @click.option('--lr', default=1e-3)
 @click.option('--num_workers', default=4)
 def run(**kwargs):
