@@ -2,6 +2,7 @@ import click, os, glob, os.path as osp
 import json
 import numpy as np
 import trimesh
+import trimesh.sample
 import igl
 from scipy.spatial.transform import Rotation
 from termcolor import colored
@@ -42,7 +43,8 @@ class ToothDataset(Dataset):
                     if tid % 10 >= 8:
                         continue
                     self.fps.append(fp)
-            self.quaternion = np.random.rand(len(self.fps), 4)  # (N, 4)
+            # uniformly sample 4d unit vector
+            self.quaternion = np.random.randn(len(self.fps), 4)  # (N, 4)
             self.quaternion /= np.linalg.norm(self.quaternion, axis=1, keepdims=True)
 
     def __len__(self):
@@ -58,12 +60,14 @@ class ToothDataset(Dataset):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
         m.vertices -= m.vertices.mean(0)
-        x = np.concatenate([m.vertices, m.vertex_normals], axis=1).astype('f4')
-        idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
-        x = x[idx]
+        pts, fi = trimesh.sample.sample_surface_even(m, 4096)
+        x = np.concatenate([pts, m.face_normals[fi]], axis=1).astype('f4')
+        # idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
+        # x = x[idx]
         tid = int(osp.basename(fp)[:2])
 
-        quaternion = np.random.rand(4)  # (N, 4)
+        # uniformly sample 4d unit vector
+        quaternion = np.random.randn(4)  # (N, 4)
         quaternion /= np.linalg.norm(quaternion)
         mat = Rotation.from_quat(quaternion).as_matrix().astype('f4')
         x[:, :3] = x[:, :3] @ mat.T
@@ -75,9 +79,10 @@ class ToothDataset(Dataset):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
         m.vertices -= m.vertices.mean(0)
-        x = np.concatenate([m.vertices, m.vertex_normals], axis=1).astype('f4')
-        idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
-        x = x[idx]
+        pts, fi = trimesh.sample.sample_surface_even(m, 4096)
+        x = np.concatenate([pts, m.face_normals[fi]], axis=1).astype('f4')
+        # idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
+        # x = x[idx]
         tid = int(osp.basename(fp)[:2])
 
         mat = Rotation.from_quat(self.quaternion[i]).as_matrix().astype('f4')
@@ -113,10 +118,11 @@ class LitModel(pl.LightningModule):
         rot_pred[:, :, 0] = pred[:, :3]
         rot_pred[:, :, 1] = pred[:, 3:]
         rot_pred[:, :, 2] = torch.cross(pred[:, :3], pred[:, 3:], dim=1)
-        rot_pred[:, :, 2] /= torch.norm(rot_pred[:, :, 2], dim=1, keepdim=True) + 1e-8
         rot_pred[:, :, 1] = torch.cross(rot_pred[:, :, 2], rot_pred[:, :, 0], dim=1)
-        rot_pred[:, :, 1] /= torch.norm(rot_pred[:, :, 1], dim=1, keepdim=True) + 1e-8
+
         rot_pred[:, :, 0] /= torch.norm(rot_pred[:, :, 0], dim=1, keepdim=True) + 1e-8
+        rot_pred[:, :, 1] /= torch.norm(rot_pred[:, :, 1], dim=1, keepdim=True) + 1e-8
+        rot_pred[:, :, 2] /= torch.norm(rot_pred[:, :, 2], dim=1, keepdim=True) + 1e-8
 
         rot_y = torch.zeros((len(y), 3, 3), device=y.device)
         rot_y[:, :, 0] = y[:, :3]
@@ -162,7 +168,7 @@ class LitModel(pl.LightningModule):
 
 @click.command()
 @click.option('--epoch', default=20)
-@click.option('--batch_size', default=20)
+@click.option('--batch_size', default=8)
 @click.option('--lr', default=1e-3)
 @click.option('--num_workers', default=4)
 def run(**kwargs):
