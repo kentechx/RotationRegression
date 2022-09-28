@@ -180,13 +180,13 @@ class Backbone_Cls(nn.Module):
 
         self.smlp = SharedMLP1d([sum(args.edgeconv_channels), args.emb_dims], args.norm)
 
-    def forward(self, x):
+    def forward(self, x, pts):
         """
         @param x: with shape(batch, input_channels, n), the first 3 dims of input_channels are xyz
         @param idx: the initial idx with shape(batch, n, k), if None then compute by x
         @return: output with `1024+n_edgeconvs*64` channels
         """
-        idx = knn(x[:, :3, :].contiguous(), self.k)      # calc idx according to xyz
+        idx = knn(pts, self.k)      # calc idx according to xyz
         x = self.convs[0](x, idx)    # the first edgeconv
 
         xs = [x]
@@ -285,7 +285,7 @@ class MyDGCNN_Cls(nn.Module):
                                  nn.Dropout(args.dropout))
         self.fc = nn.Linear(256, args.output_channels)
 
-    def forward(self, x):
+    def forward(self, x, pts):
         """
         :param x: (batch_size, input_channels, num_points)
         :return:
@@ -297,7 +297,7 @@ class MyDGCNN_Cls(nn.Module):
         else:
             t = 1
 
-        x = self.backbone(x)
+        x = self.backbone(x, pts)
         x = self.fc(self.mlp(x))
 
         return x, t
