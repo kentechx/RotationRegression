@@ -16,7 +16,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from models.my_dgcnn import MyDGCNN_Cls
+from my_dgcnn import MyDGCNN_Cls
 
 
 class ToothDataset(Dataset):
@@ -60,7 +60,7 @@ class ToothDataset(Dataset):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
         m.vertices -= m.vertices.mean(0)
-        pts, fi = trimesh.sample.sample_surface_even(m, 4096)
+        pts, fi = trimesh.sample.sample_surface_even(m, 1024)
         x = np.concatenate([pts, m.face_normals[fi]], axis=1).astype('f4')
         # idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
         # x = x[idx]
@@ -73,13 +73,13 @@ class ToothDataset(Dataset):
         x[:, :3] = x[:, :3] @ mat.T
         x[:, 3:] = x[:, 3:] @ mat.T
 
-        return x.T, mat[:, :2].T.reshape(-1), tid, fp
+        return x.T, mat.T.reshape(-1), tid, fp
 
     def get_test_data(self, i):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
         m.vertices -= m.vertices.mean(0)
-        pts, fi = trimesh.sample.sample_surface_even(m, 4096)
+        pts, fi = trimesh.sample.sample_surface_even(m, 1024)
         x = np.concatenate([pts, m.face_normals[fi]], axis=1).astype('f4')
         # idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
         # x = x[idx]
@@ -89,7 +89,7 @@ class ToothDataset(Dataset):
         x[:, :3] = x[:, :3] @ mat.T
         x[:, 3:] = x[:, 3:] @ mat.T
 
-        return x.T, mat[:, :2].T.reshape(-1), tid, fp
+        return x.T, mat.T.reshape(-1), tid, fp
 
 
 class LitModel(pl.LightningModule):
@@ -110,8 +110,12 @@ class LitModel(pl.LightningModule):
         args.dropout = 0.
         self.net = MyDGCNN_Cls(args)
 
-    def forward(self, x):
-        return self.net(x)
+    def forward(self, x, pts):
+        return self.net(x, pts)
+
+    def matrix_loss(self, pred, y):
+        pred_z = torch.cross(pred[:, :3], pred[:, 3:], dim=1)
+        return F.mse_loss(pred_z, y[:, 6:]) + F.mse_loss(pred, y[:, :6]) * 2
 
     def angle_diff(self, pred, y):
         rot_pred = torch.zeros((len(pred), 3, 3), device=pred.device)
@@ -126,16 +130,16 @@ class LitModel(pl.LightningModule):
 
         rot_y = torch.zeros((len(y), 3, 3), device=y.device)
         rot_y[:, :, 0] = y[:, :3]
-        rot_y[:, :, 1] = y[:, 3:]
-        rot_y[:, :, 2] = torch.cross(y[:, :3], y[:, 3:], dim=1)
+        rot_y[:, :, 1] = y[:, 3:6]
+        rot_y[:, :, 2] = y[:, 6:]
         rot = torch.bmm(rot_pred, rot_y.transpose(1, 2))
         angle = torch.clip((rot.diagonal(dim1=1, dim2=2).sum(-1) - 1.) / 2., -1, 1).acos() * 180 / np.pi
         return angle.mean()
 
     def training_step(self, batch, batch_idx):
         X, y, tid, fp = batch
-        pred, _ = self(X)
-        loss = F.mse_loss(pred, y)
+        pred, _ = self(X, X[:, :3].clone())
+        loss = self.matrix_loss(pred, y)
         angle = self.angle_diff(pred, y)
         self.log("angle_diff", angle, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("loss", loss, batch_size=self.hparams['batch_size'])
@@ -144,8 +148,8 @@ class LitModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         X, y, tid, fp = batch
-        pred, _ = self(X)
-        loss = F.mse_loss(pred, y)
+        pred, _ = self(X, X[:, :3].clone())
+        loss = self.matrix_loss(pred, y)
         angle = self.angle_diff(pred, y)
         self.log("val_angle_diff", angle, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("val_loss", loss, prog_bar=True, batch_size=self.hparams['batch_size'])
@@ -168,16 +172,17 @@ class LitModel(pl.LightningModule):
 
 @click.command()
 @click.option('--epoch', default=20)
-@click.option('--batch_size', default=8)
+@click.option('--batch_size', default=20)
 @click.option('--lr', default=1e-3)
 @click.option('--num_workers', default=4)
+@click.option('--version', default='demo_3d_3')
 def run(**kwargs):
     print(colored(json.dumps(kwargs, indent=2), 'blue'))
 
     pl.seed_everything(42)
 
     # logger
-    version = 'demo_3d2'
+    version = kwargs['version']
     logger = TensorBoardLogger("work_dir", name="demo", version=version)
 
     # trainer
