@@ -88,6 +88,41 @@ class ToothDataset(Dataset):
         return x.T, mat.T.reshape(-1), tid, fp
 
 
+def angle_diff(pred, y):
+    rot_pred = torch.zeros((len(pred), 3, 3), device=pred.device)
+    rot_pred[:, :, 0] = pred[:, :3]
+    rot_pred[:, :, 1] = pred[:, 3:]
+    rot_pred[:, :, 2] = torch.cross(pred[:, :3], pred[:, 3:], dim=1)
+    rot_pred[:, :, 1] = torch.cross(rot_pred[:, :, 2], rot_pred[:, :, 0], dim=1)
+
+    rot_pred[:, :, 0] /= torch.norm(rot_pred[:, :, 0], dim=1, keepdim=True) + 1e-8
+    rot_pred[:, :, 1] /= torch.norm(rot_pred[:, :, 1], dim=1, keepdim=True) + 1e-8
+    rot_pred[:, :, 2] /= torch.norm(rot_pred[:, :, 2], dim=1, keepdim=True) + 1e-8
+
+    rot_y = torch.zeros((len(y), 3, 3), device=y.device)
+    rot_y[:, :, 0] = y[:, :3]
+    rot_y[:, :, 1] = y[:, 3:6]
+    rot_y[:, :, 2] = y[:, 6:]
+    rot = torch.bmm(rot_pred, rot_y.transpose(1, 2))
+    angle = torch.clip((rot.diagonal(dim1=1, dim2=2).sum(-1) - 1.) / 2., -1, 1).acos() * 180 / np.pi  # (n, )
+    return angle
+
+
+class AngleGeodesic(torchmetrics.Metric):
+    def __init__(self):
+        super().__init__()
+        self.add_state("angle_geodesic", default=torch.tensor(0.), dist_reduce_fx="sum")
+        self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
+
+    def update(self, preds: torch.Tensor, target: torch.Tensor):
+        angles = angle_diff(preds, target)
+        self.angle_geodesic += angles.sum()
+        self.total += len(preds)
+
+    def compute(self):
+        return self.angle_geodesic / self.total
+
+
 class LitModel(pl.LightningModule):
 
     def __init__(self, epochs, batch_size, lr, num_pts, num_workers):
@@ -106,35 +141,20 @@ class LitModel(pl.LightningModule):
         args.dropout = 0.
         self.net = MyDGCNN_Cls(args)
 
+        self.train_angle_geodesic = AngleGeodesic()
+        self.val_angle_geodesic = AngleGeodesic()
+
     def forward(self, x, pts):
         return self.net(x, pts)
-
-    def angle_diff(self, pred, y):
-        rot_pred = torch.zeros((len(pred), 3, 3), device=pred.device)
-        rot_pred[:, :, 0] = pred[:, :3]
-        rot_pred[:, :, 1] = pred[:, 3:]
-        rot_pred[:, :, 2] = torch.cross(pred[:, :3], pred[:, 3:], dim=1)
-        rot_pred[:, :, 1] = torch.cross(rot_pred[:, :, 2], rot_pred[:, :, 0], dim=1)
-
-        rot_pred[:, :, 0] /= torch.norm(rot_pred[:, :, 0], dim=1, keepdim=True) + 1e-8
-        rot_pred[:, :, 1] /= torch.norm(rot_pred[:, :, 1], dim=1, keepdim=True) + 1e-8
-        rot_pred[:, :, 2] /= torch.norm(rot_pred[:, :, 2], dim=1, keepdim=True) + 1e-8
-
-        rot_y = torch.zeros((len(y), 3, 3), device=y.device)
-        rot_y[:, :, 0] = y[:, :3]
-        rot_y[:, :, 1] = y[:, 3:6]
-        rot_y[:, :, 2] = y[:, 6:]
-        rot = torch.bmm(rot_pred, rot_y.transpose(1, 2))
-        angle = torch.clip((rot.diagonal(dim1=1, dim2=2).sum(-1) - 1.) / 2., -1, 1).acos() * 180 / np.pi
-        return angle.mean(), angle.max()
 
     def training_step(self, batch, batch_idx):
         X, y, tid, fp = batch
         pred, _ = self(X, X[:, :3].clone())
         loss = F.mse_loss(pred, y[:, :6])
-        angle_mean, angle_max = self.angle_diff(pred, y)
-        self.log("angle_diff", angle_mean, prog_bar=True, batch_size=self.hparams['batch_size'])
-        self.log("angle_diff_max", angle_max, prog_bar=True, batch_size=self.hparams['batch_size'])
+        angles = angle_diff(pred, y)
+        self.train_angle_geodesic(pred, y)
+        self.log("angle_diff", self.train_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("loss", loss, batch_size=self.hparams['batch_size'])
         self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"])
         return loss
@@ -143,9 +163,10 @@ class LitModel(pl.LightningModule):
         X, y, tid, fp = batch
         pred, _ = self(X, X[:, :3].clone())
         loss = F.mse_loss(pred, y[:, :6])
-        angle_mean, angle_max = self.angle_diff(pred, y)
-        self.log("val_angle_diff", angle_mean, prog_bar=True, batch_size=self.hparams['batch_size'])
-        self.log("val_angle_diff_max", angle_max, prog_bar=True, batch_size=self.hparams['batch_size'])
+        angles = angle_diff(pred, y)
+        self.val_angle_geodesic(pred, y)
+        self.log("val_angle_diff", self.val_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("val_angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("val_loss", loss, prog_bar=True, batch_size=self.hparams['batch_size'])
 
     def configure_optimizers(self):
@@ -165,10 +186,10 @@ class LitModel(pl.LightningModule):
 
 
 @click.command()
-@click.option('--epoch', default=20)
-@click.option('--batch_size', default=64)
+@click.option('--epoch', default=100)
+@click.option('--batch_size', default=20)
 @click.option('--lr', default=1e-3)
-@click.option('--num_pts', default=1024)
+@click.option('--num_pts', default=4096)
 @click.option('--num_workers', default=4)
 @click.option('--version', default='demo_3d_5')
 def run(**kwargs):
