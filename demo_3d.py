@@ -22,9 +22,10 @@ from my_dgcnn import MyDGCNN_Cls
 class ToothDataset(Dataset):
     test_scenes = ['1801_2000', '2001_2175']
 
-    def __init__(self, data_path="/home/kent/Datasets/step_data/data2000_20200810",
-                 train=True):
+    def __init__(self, data_path="/mnt/datasets/tooth/step_tooth",
+                 train=True, num_pts=1024):
         self.train = train
+        self.num_pts = num_pts
         if train:
             self.fps = []
             for scene in os.listdir(data_path):
@@ -60,7 +61,7 @@ class ToothDataset(Dataset):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
         m.vertices -= m.vertices.mean(0)
-        pts, fi = trimesh.sample.sample_surface_even(m, 1024)
+        pts, fi = trimesh.sample.sample_surface_even(m, self.num_pts)
         x = np.concatenate([pts, m.face_normals[fi]], axis=1).astype('f4')
         # idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
         # x = x[idx]
@@ -79,7 +80,7 @@ class ToothDataset(Dataset):
         fp = self.fps[i]
         m: trimesh.Trimesh = trimesh.load(fp)
         m.vertices -= m.vertices.mean(0)
-        pts, fi = trimesh.sample.sample_surface_even(m, 1024)
+        pts, fi = trimesh.sample.sample_surface_even(m, self.num_pts)
         x = np.concatenate([pts, m.face_normals[fi]], axis=1).astype('f4')
         # idx = np.random.choice(np.arange(len(x)), 1024, replace=True)
         # x = x[idx]
@@ -94,7 +95,7 @@ class ToothDataset(Dataset):
 
 class LitModel(pl.LightningModule):
 
-    def __init__(self, epochs, batch_size, lr, num_workers):
+    def __init__(self, epochs, batch_size, lr, num_pts, num_workers):
         super().__init__()
         self.save_hyperparameters()
         args = type('', (), {})()
@@ -162,11 +163,11 @@ class LitModel(pl.LightningModule):
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step'}]
 
     def train_dataloader(self):
-        return DataLoader(ToothDataset(train=True), batch_size=self.hparams.batch_size,
+        return DataLoader(ToothDataset(train=True, num_pts=self.hparams.num_pts), batch_size=self.hparams.batch_size,
                           num_workers=self.hparams['num_workers'], shuffle=True, pin_memory=True)
 
     def val_dataloader(self):
-        return DataLoader(ToothDataset(train=False), batch_size=self.hparams.batch_size,
+        return DataLoader(ToothDataset(train=False, num_pts=self.hparams.num_pts), batch_size=self.hparams.batch_size,
                           num_workers=self.hparams['num_workers'], shuffle=False, pin_memory=True)
 
 
@@ -174,6 +175,7 @@ class LitModel(pl.LightningModule):
 @click.option('--epoch', default=20)
 @click.option('--batch_size', default=20)
 @click.option('--lr', default=1e-3)
+@click.option('--num_pts', default=1024)
 @click.option('--num_workers', default=4)
 @click.option('--version', default='demo_3d_3')
 def run(**kwargs):
@@ -189,7 +191,7 @@ def run(**kwargs):
     debug = False
     debug_args = {'limit_train_batches': 10, "limit_val_batches": 10} if debug else {}
 
-    model = LitModel(kwargs['epoch'], kwargs['batch_size'], kwargs['lr'], kwargs['num_workers'])
+    model = LitModel(kwargs['epoch'], kwargs['batch_size'], kwargs['lr'], kwargs['num_pts'], kwargs['num_workers'])
     callback = ModelCheckpoint(save_last=True)
     trainer = pl.Trainer(logger, accelerator='gpu', max_epochs=kwargs["epoch"], callbacks=[callback], **debug_args)
 
