@@ -194,12 +194,13 @@ class LitModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         X0, y0, X, y, tid, fp = batch
-        shape0, pred0 = self(X0, X0[:, :3].clone())
-        self.update_mean_shape(shape0)
-        shape, pred = self(X, X[:, :3].clone())
-        loss = (F.mse_loss(pred, y[:, :6]) + F.mse_loss(pred0, y0[:, :6])) / 2.
-        angles = (angle_diff(pred, y) + angle_diff(pred0, y0)) / 2.
-        self.train_angle_geodesic(pred, y)
+        X_ = torch.concat([X0, X], dim=0)
+        y_ = torch.concat([y0, y], dim=0)
+        shape, pred = self(X_, X_[:, :3].clone())
+        self.update_mean_shape(shape[:len(X0)])
+        loss = F.mse_loss(pred, y_[:, :6])
+        angles = angle_diff(pred, y_)
+        self.train_angle_geodesic(pred, y_)
         self.log("angle_diff", self.train_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("loss", loss, batch_size=self.hparams['batch_size'])
@@ -234,11 +235,11 @@ class LitModel(pl.LightningModule):
 
 @click.command()
 @click.option('--epoch', default=100)
-@click.option('--batch_size', default=20)
+@click.option('--batch_size', default=10)
 @click.option('--lr', default=1e-3)
 @click.option('--num_pts', default=1024)
 @click.option('--num_workers', default=4)
-@click.option('--version', default='demo_3d_temp')
+@click.option('--version', default='demo_3d_temp2')
 def run(**kwargs):
     print(colored(json.dumps(kwargs, indent=2), 'blue'))
 
