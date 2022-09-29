@@ -44,7 +44,7 @@ class ToothDataset(Dataset):
                     if tid % 10 >= 8:
                         continue
                     self.fps.append(fp)
-            self.mat = Rotation.random(len(self.fps)).as_matrix().astype('f4')
+            self.mat = Rotation.random(len(self.fps), random_state=42).as_matrix().astype('f4')
 
     def __len__(self):
         return len(self.fps)
