@@ -60,34 +60,19 @@ def spiral_sphere(n=1000):
     return xyz
 
 
-def spiral_sphere4d(n=1000):
-    """
-    n     angle diff (u, sigma)
-    100   (18.7, 1.0)
-    200   (13.3, 0.8)
-    300   (10.8, 0.6)
-    400   (9.3, 0.5)
-    500   (8.5, 0.5)
-    1000  (6, 0.3)
-    2000  (4.2, 0.3)
-    3000  (3.45, 0.22)
-    4000  (3, 0.2)
-    5000  (2.7, 0.2)
-    6000  (2.44, 0.16)
-    7000  (2.26, 0.147)
-    10000 (1.9, 0.13)
-    :param n:
-    :return:
-    """
-    indices = np.arange(0, n, dtype=float) + 0.5
+def spiral_sphere4d(d=1000):
+    screws = np.pi / d
 
-    phi = np.arccos(1 - 2 * indices / n)
-    theta = np.pi * (1 + 5 ** 0.5) * indices
-
-    x, y, z = np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)
-    xyz = np.stack([x, y, z], axis=1)
-    xyz = np.repeat(xyz[:, np.newaxis, :], 4, axis=1)
-    return xyz
+    n = int(3.0 * np.pi ** 3 / (4.0 * d * d * d))
+    ts = np.linspace(0, 1, n)
+    a = np.pi * ts
+    b = np.pi * ts * screws
+    c = 2.0 * np.pi * ts * screws * screws
+    x = np.cos(a)
+    y = np.sin(a) * np.cos(b)
+    z = np.sin(a) * np.sin(b) * np.cos(c)
+    w = np.sin(a) * np.sin(b) * np.sin(c)
+    return np.stack([x, y, z, w], axis=1)
 
 
 def generate_rotations(n=1000, angle_thresh=None):
