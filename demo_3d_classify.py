@@ -191,7 +191,7 @@ class LitModel(pl.LightningModule):
 @click.option('--lr', default=1e-3)
 @click.option('--num_pts', default=1024)
 @click.option('--num_workers', default=4)
-@click.option('--version', default='demo_3d_5')
+@click.option('--version', default='demo_3d_cls')
 def run(**kwargs):
     print(colored(json.dumps(kwargs, indent=2), 'blue'))
 
