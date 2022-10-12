@@ -19,6 +19,23 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from my_dgcnn import MyDGCNN_Cls
 
 
+def rotation_matrix_from_vectors(vec1, vec2):
+    a, b = (vec1 / np.linalg.norm(vec1)).reshape(3), (vec2 / np.linalg.norm(vec2)).reshape(3)
+    v = np.cross(a, b)
+    c = np.dot(a, b)
+    s = np.linalg.norm(v)
+    if s == 0:
+        return np.identity(3)
+    kmat = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    rotation_matrix = np.identity(3) + kmat + kmat.dot(kmat) * ((1 - c) / (s ** 2))
+    return rotation_matrix
+
+
+def generate_uniform_rotations(delta_angle=1. / 180 * np.pi, angle_range=np.pi):
+    thetas = np.linspace(0, angle_range, int(angle_range / delta_angle))
+    raise NotImplementedError
+
+
 class ToothDataset(Dataset):
     test_scenes = ['1801_2000', '2001_2175']
 
@@ -31,20 +48,16 @@ class ToothDataset(Dataset):
             for scene in os.listdir(data_path):
                 if scene in self.test_scenes:
                     continue
-                for fp in glob.glob(osp.join(data_path, scene, "*/35._Crown.stl")):
-                    tid = int(osp.basename(fp)[:2])
-                    if tid % 10 >= 8:
-                        continue
-                    self.fps.append(fp)
+                fps = glob.glob(osp.join(data_path, scene, "*/35._Crown.stl"))
+                self.fps.extend(fps)
         else:
             self.fps = []
             for scene in self.test_scenes:
-                for fp in glob.glob(osp.join(data_path, scene, "*/35._Crown.stl")):
-                    tid = int(osp.basename(fp)[:2])
-                    if tid % 10 >= 8:
-                        continue
-                    self.fps.append(fp)
-            self.mat = Rotation.random(len(self.fps), random_state=42).as_matrix().astype('f4')
+                fps = glob.glob(osp.join(data_path, scene, "*/35._Crown.stl"))
+                self.fps.extend(fps)
+
+        # generate rotation matrices uniformly distributed on sphere
+        self.mat = generate_uniform_rotations()
 
     def __len__(self):
         return len(self.fps)

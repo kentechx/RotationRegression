@@ -22,7 +22,7 @@ from my_dgcnn import MyDGCNN_Cls
 class ToothDataset(Dataset):
     test_scenes = ['1801_2000', '2001_2175']
 
-    def __init__(self, data_path="/mnt/datasets/tooth/step_tooth",
+    def __init__(self, data_path="/home/kent/Datasets/step_data/data2000_20200810",
                  train=True, num_pts=1024):
         self.train = train
         self.num_pts = num_pts
@@ -31,19 +31,13 @@ class ToothDataset(Dataset):
             for scene in os.listdir(data_path):
                 if scene in self.test_scenes:
                     continue
-                for fp in glob.glob(osp.join(data_path, scene, "*/3*._Crown.stl")):
-                    tid = int(osp.basename(fp)[:2])
-                    if tid % 10 >= 8:
-                        continue
-                    self.fps.append(fp)
+                fps = glob.glob(osp.join(data_path, scene, "*/35._Crown.stl"))
+                self.fps.extend(fps)
         else:
             self.fps = []
             for scene in self.test_scenes:
-                for fp in glob.glob(osp.join(data_path, scene, "*/3*._Crown.stl")):
-                    tid = int(osp.basename(fp)[:2])
-                    if tid % 10 >= 8:
-                        continue
-                    self.fps.append(fp)
+                fps = glob.glob(osp.join(data_path, scene, "*/35._Crown.stl"))
+                self.fps.extend(fps)
             self.mat = Rotation.random(len(self.fps), random_state=42).as_matrix().astype('f4')
 
     def __len__(self):
@@ -189,9 +183,9 @@ class LitModel(pl.LightningModule):
 @click.option('--epoch', default=100)
 @click.option('--batch_size', default=20)
 @click.option('--lr', default=1e-3)
-@click.option('--num_pts', default=4096)
+@click.option('--num_pts', default=1024)
 @click.option('--num_workers', default=4)
-@click.option('--version', default='demo_3d_5')
+@click.option('--version', default='demo_3d')
 def run(**kwargs):
     print(colored(json.dumps(kwargs, indent=2), 'blue'))
 
