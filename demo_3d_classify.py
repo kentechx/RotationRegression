@@ -205,9 +205,7 @@ class LitModel(pl.LightningModule):
         self.val_angle_geodesic = AngleGeodesic()
         self.val_acc = torchmetrics.Accuracy()
 
-    def forward(self, xyz, normals, batch_idx):
-        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
-        rots = self.rot_list[rot_i][None]
+    def forward(self, xyz, normals, rots):
         xyz = torch.tile(xyz.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)
         # normals = torch.tile(normals.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)
         # x = torch.cat([xyz.view(xyz.shape[0], xyz.shape[1], -1),
@@ -215,14 +213,7 @@ class LitModel(pl.LightningModule):
         x = xyz.view(xyz.shape[0], xyz.shape[1], -1).transpose(1, 2).contiguous()
         return self.net(x)
 
-    def get_y(self, rot_y, batch_idx):
-        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
-        rots = torch.tile(self.rot_list[rot_i], (rot_y.shape[0], 1, 1, 1))  # (B, N, 3, 3)
-
-        if rot_i > 0:
-            # rotate rots
-            rots = rots @ rot_y[:, None]
-
+    def get_y(self, rots, rot_y):
         ys = []
         for bi in range(rot_y.shape[0]):
             angles = angle_diff(rots[bi], torch.tile(rot_y[[bi]], (rots.shape[1], 1, 1)))
@@ -232,15 +223,23 @@ class LitModel(pl.LightningModule):
         ys = torch.stack(ys)
         return ys
 
+    def get_rots(self, rot_y, batch_idx):
+        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
+        rots = torch.tile(self.rot_list[rot_i], (rot_y.shape[0], 1, 1, 1))  # (B, N, 3, 3)
+
+        if rot_i > 0:
+            # rotate rots
+            rots = rots @ rot_y[:, None]
+        return rots
+
     def training_step(self, batch, batch_idx):
         xyz, normals, rot_y, tid, fp = batch
-        ys = self.get_y(rot_y, batch_idx)
-        pred, _ = self(xyz, normals, batch_idx)
+        rots = self.get_rots(rot_y, batch_idx)
+        ys = self.get_y(rots, rot_y)
+        pred, _ = self(xyz, normals, rots)
         pred = pred[:, 0]
         loss = F.cross_entropy(pred, ys.argmax(1))
 
-        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
-        rots = self.rot_list[rot_i][None]
         rot_pred = rots[:, pred.argmax(1)][:, 0]
         rot_y = rots[:, ys.argmax(1)][:, 0]
         angles = angle_diff(rot_pred, rot_y)
@@ -255,13 +254,12 @@ class LitModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         xyz, normals, rot_y, tid, fp = batch
-        ys = self.get_y(rot_y, batch_idx)
-        pred, _ = self(xyz, normals, batch_idx)
+        rots = self.get_rots(rot_y, batch_idx)
+        ys = self.get_y(rots, rot_y)
+        pred, _ = self(xyz, normals, rots)
         pred = pred[:, 0]
         loss = F.cross_entropy(pred, ys.argmax(1))
 
-        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
-        rots = self.rot_list[rot_i][None]
         rot_pred = rots[:, pred.argmax(1)][:, 0]
         rot_y = rots[:, ys.argmax(1)][:, 0]
         angles = angle_diff(rot_pred, rot_y)
