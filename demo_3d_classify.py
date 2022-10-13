@@ -177,16 +177,19 @@ class LitModel(pl.LightningModule):
         self.save_hyperparameters()
 
         # rotations
+        self.rot_list_probs = [0.2, 0.3, 0.5]
         self.rot_list = nn.ParameterList([
-            nn.Parameter(torch.tensor(generate_rotations(400), dtype=torch.float32), requires_grad=False),
-            nn.Parameter(torch.tensor(generate_rotations(10000, 20.), dtype=torch.float32), requires_grad=False)])
+            nn.Parameter(torch.tensor(generate_rotations(20.), dtype=torch.float32), requires_grad=False),
+            nn.Parameter(torch.tensor(generate_rotations(5., 40), dtype=torch.float32), requires_grad=False),
+            nn.Parameter(torch.tensor(generate_rotations(1.5, 10), dtype=torch.float32), requires_grad=False)])
+        self.rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
 
         # network
         args = type('', (), {})()
         args.k = 64
         args.dynamic = True
         args.use_stn = False
-        args.input_channels = num_pts * 3 * 2
+        args.input_channels = num_pts * 3
         args.output_channels = 1
         args.n_edgeconvs_backbone = 3
         args.edgeconv_channels = [64, 64, 64]
@@ -202,75 +205,71 @@ class LitModel(pl.LightningModule):
         self.val_angle_geodesic = AngleGeodesic()
         self.val_acc = torchmetrics.Accuracy()
 
-    def forward(self, xyz, normals):
-        rots = torch.cat([rot.data for rot in self.rot_list], dim=0)[None]
+    def forward(self, xyz, normals, batch_idx):
+        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
+        rots = self.rot_list[rot_i][None]
         xyz = torch.tile(xyz.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)
-        normals = torch.tile(normals.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)
-        x = torch.cat([xyz.view(xyz.shape[0], xyz.shape[1], -1),
-                       normals.view(normals.shape[0], normals.shape[1], -1)], dim=2).transpose(1, 2)
+        # normals = torch.tile(normals.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)
+        # x = torch.cat([xyz.view(xyz.shape[0], xyz.shape[1], -1),
+        #                normals.view(normals.shape[0], normals.shape[1], -1)], dim=2).transpose(1, 2)
+        x = xyz.view(xyz.shape[0], xyz.shape[1], -1).transpose(1, 2).contiguous()
         return self.net(x)
 
-    def get_y(self, rot_y):
-        out_ys = []
-        for i, rot in enumerate(self.rot_list):
-            ys = []
-            for bi in range(rot_y.shape[0]):
-                angles = angle_diff(rot, torch.tile(rot_y[[bi]], (rot.shape[0], 1, 1)))
-                y = torch.zeros(rot.shape[0], dtype=torch.float32, device=rot.device)
-                y[angles.argmin()] = 1.
-                ys.append(y)
-            ys = torch.stack(ys)
-            out_ys.append(ys)
-        return out_ys
+    def get_y(self, rot_y, batch_idx):
+        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
+        rots = torch.tile(self.rot_list[rot_i], (rot_y.shape[0], 1, 1, 1))  # (B, N, 3, 3)
 
-    def get_loss(self, pred, ys):
-        loss = 0.
-        i = 0
-        for y in ys:
-            loss += F.binary_cross_entropy_with_logits(pred[:, i:i + y.shape[1]], y)
-            i += y.shape[1]
-        return loss
+        if rot_i > 0:
+            # rotate rots
+            rots = rots @ rot_y[:, None]
 
-    def get_angles(self):
-        pass
+        ys = []
+        for bi in range(rot_y.shape[0]):
+            angles = angle_diff(rots[bi], torch.tile(rot_y[[bi]], (rots.shape[1], 1, 1)))
+            y = torch.zeros(rots.shape[1], dtype=torch.long, device=rots.device)
+            y[angles.argmin()] = 1.
+            ys.append(y)
+        ys = torch.stack(ys)
+        return ys
 
     def training_step(self, batch, batch_idx):
         xyz, normals, rot_y, tid, fp = batch
-        ys = self.get_y(rot_y)
-        pred, _ = self(xyz, normals)
+        ys = self.get_y(rot_y, batch_idx)
+        pred, _ = self(xyz, normals, batch_idx)
         pred = pred[:, 0]
-        loss = self.get_loss(pred, ys)
+        loss = F.cross_entropy(pred, ys.argmax(1))
 
-        # rots = torch.cat([rot.data for rot in self.rot_list], dim=0)[None]
-        # rot_pred = self.rots[:, pred.argmax(1)][:, 0]
-        # rot_y = self.rots[:, y.argmax(1)][:, 0]
-        # angles = angle_diff(rot_pred, rot_y)
-        # self.train_angle_geodesic(rot_pred, rot_y)
-        # self.tran_acc(pred.argmax(1), y.argmax(1))
-        # self.log("angle_diff", self.train_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
-        # self.log("angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
-        # self.log("acc", self.tran_acc, prog_bar=True, batch_size=self.hparams['batch_size'])
+        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
+        rots = self.rot_list[rot_i][None]
+        rot_pred = rots[:, pred.argmax(1)][:, 0]
+        rot_y = rots[:, ys.argmax(1)][:, 0]
+        angles = angle_diff(rot_pred, rot_y)
+        self.train_angle_geodesic(rot_pred, rot_y)
+        self.tran_acc(pred.argmax(1), ys.argmax(1))
+        self.log("angle_diff", self.train_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("acc", self.tran_acc, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("loss", loss, batch_size=self.hparams['batch_size'])
         self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"])
         return loss
 
     def validation_step(self, batch, batch_idx):
         xyz, normals, rot_y, tid, fp = batch
-        ys = self.get_y(rot_y)
-        pred, _ = self(xyz, normals)
+        ys = self.get_y(rot_y, batch_idx)
+        pred, _ = self(xyz, normals, batch_idx)
         pred = pred[:, 0]
-        loss = self.get_loss(pred, ys)
+        loss = F.cross_entropy(pred, ys.argmax(1))
 
-        # rots = torch.cat([rot.data for rot in self.rot_list], dim=0)[None]
-        # rot_pred = rots[:, pred.argmax(1)][:, 0]
-        # y = torch.cat(ys, dim=1)
-        # rot_y = rots[:, y.argmax(1)][:, 0]
-        # angles = angle_diff(rot_pred, rot_y)
-        # self.val_angle_geodesic(rot_pred, rot_y)
-        # self.val_acc(pred.argmax(1), ys.argmax(1))
-        # self.log("val_angle_diff", self.val_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
-        # self.log("val_angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
-        # self.log("val_acc", self.val_acc, prog_bar=True, batch_size=self.hparams['batch_size'])
+        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
+        rots = self.rot_list[rot_i][None]
+        rot_pred = rots[:, pred.argmax(1)][:, 0]
+        rot_y = rots[:, ys.argmax(1)][:, 0]
+        angles = angle_diff(rot_pred, rot_y)
+        self.val_angle_geodesic(rot_pred, rot_y)
+        self.val_acc(pred.argmax(1), ys.argmax(1))
+        self.log("val_angle_diff", self.val_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("val_angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("val_acc", self.val_acc, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("val_loss", loss, prog_bar=True, batch_size=self.hparams['batch_size'])
 
     def configure_optimizers(self):
@@ -290,7 +289,7 @@ class LitModel(pl.LightningModule):
 
 
 @click.command()
-@click.option('--epoch', default=100)
+@click.option('--epoch', default=10)
 @click.option('--batch_size', default=1)
 @click.option('--lr', default=1e-3)
 @click.option('--num_pts', default=1024)
