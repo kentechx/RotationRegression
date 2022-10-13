@@ -52,10 +52,10 @@ def spiral_sphere(n=1000):
     """
     indices = np.arange(0, n, dtype=float) + 0.5
 
-    phi = np.arccos(1 - 2 * indices / n)
-    theta = np.pi * (1 + 5 ** 0.5) * indices
+    theta = np.arccos(1 - 2 * indices / n)
+    phi = np.pi * (1 + 5 ** 0.5) * indices
 
-    x, y, z = np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)
+    x, y, z = np.cos(phi) * np.sin(theta), np.sin(phi) * np.sin(theta), np.cos(theta)
     xyz = np.stack([x, y, z], axis=1)
     return xyz
 
