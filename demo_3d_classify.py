@@ -217,8 +217,8 @@ class LitModel(pl.LightningModule):
         ys = []
         for bi in range(rot_y.shape[0]):
             angles = angle_diff(rots[bi], torch.tile(rot_y[[bi]], (rots.shape[1], 1, 1)))
-            y = torch.zeros(rots.shape[1], dtype=torch.long, device=rots.device)
-            y[angles.argmin()] = 1.
+            y = torch.exp(-(angles - angles.min()) ** 2 / (1. ** 2))
+            y = y / y.sum()
             ys.append(y)
         ys = torch.stack(ys)
         return ys
@@ -238,7 +238,7 @@ class LitModel(pl.LightningModule):
         ys = self.get_y(rots, rot_y)
         pred, _ = self(xyz, normals, rots)
         pred = pred[:, 0]
-        loss = F.cross_entropy(pred, ys.argmax(1))
+        loss = F.cross_entropy(pred, ys)
 
         rot_pred = rots[:, pred.argmax(1)][:, 0]
         rot_y = rots[:, ys.argmax(1)][:, 0]
@@ -258,7 +258,7 @@ class LitModel(pl.LightningModule):
         ys = self.get_y(rots, rot_y)
         pred, _ = self(xyz, normals, rots)
         pred = pred[:, 0]
-        loss = F.cross_entropy(pred, ys.argmax(1))
+        loss = F.cross_entropy(pred, ys)
 
         rot_pred = rots[:, pred.argmax(1)][:, 0]
         rot_y = rots[:, ys.argmax(1)][:, 0]
