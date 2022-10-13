@@ -31,7 +31,7 @@ def rotation_matrix_from_vectors(vec1, vec2):
     return rotation_matrix
 
 
-def spiral_sphere(n=1000):
+def spiral_sphere(delta_angle=10.):
     """
     n     angle diff (u, sigma)
     100   (18.7, 1.0)
@@ -50,6 +50,12 @@ def spiral_sphere(n=1000):
     :param n:
     :return:
     """
+    # estimate n
+    delta_radius = delta_angle * np.pi / 180
+    rhs = (1 - np.cos(delta_radius)) / (1 - np.cos(np.pi * (1 + 5 ** 0.5)))
+    n = int(1.5 / (1 - np.cos(np.arcsin(rhs ** 0.5))))
+
+    # generate points on a sphere
     indices = np.arange(0, n, dtype=float) + 0.5
 
     theta = np.arccos(1 - 2 * indices / n)
@@ -60,32 +66,27 @@ def spiral_sphere(n=1000):
     return xyz
 
 
-def spiral_sphere4d(d=1000):
-    screws = np.pi / d
+def generate_rotations(delta_angle=10., angle_thresh=None):
+    ref_z_axis = np.array([0, 0, 1.])
+    ref_x_axis = Rotation.from_euler('z', np.arange(np.ceil(360 / delta_angle).astype('i4')) * delta_angle,
+                                     degrees=True).as_matrix() @ np.array([1., 0, 0])
 
-    n = int(3.0 * np.pi ** 3 / (4.0 * d * d * d))
-    ts = np.linspace(0, 1, n)
-    a = np.pi * ts
-    b = np.pi * ts * screws
-    c = 2.0 * np.pi * ts * screws * screws
-    x = np.cos(a)
-    y = np.sin(a) * np.cos(b)
-    z = np.sin(a) * np.sin(b) * np.cos(c)
-    w = np.sin(a) * np.sin(b) * np.sin(c)
-    return np.stack([x, y, z, w], axis=1)
-
-
-def generate_rotations(n=1000, angle_thresh=None):
-    z_axis = np.array([0, 0, 1.])
-    z_axis2 = spiral_sphere(n)
-    if angle_thresh is not None:
-        angles = np.arccos(np.clip(np.sum(z_axis * z_axis2, axis=1), -1, 1)) * 180 / np.pi
-        z_axis2 = z_axis2[angles < angle_thresh]
     rotations = []
-    for i in range(len(z_axis2)):
-        rot = rotation_matrix_from_vectors(z_axis, z_axis2[i])
-        rotations.append(rot)
-    return np.array(rotations)
+    z_axis = spiral_sphere(delta_angle)
+    for i in range(len(z_axis)):
+        rot = rotation_matrix_from_vectors(ref_z_axis, z_axis[i])
+        x_axis = ref_x_axis @ rot.T
+        y_axis = np.cross(z_axis[i], x_axis)
+        rots = np.stack([x_axis, y_axis, np.tile(z_axis[i], (len(x_axis), 1))], axis=1)
+        rotations.append(rots)
+
+    rotations = np.concatenate(rotations, axis=0)
+
+    if angle_thresh is not None:
+        angles = np.arccos(((rotations.diagonal(axis1=1, axis2=2).sum(-1) - 1.) / 2.).clip(-1.,
+                                                                                           1.)) * 180 / np.pi  # (n, )
+        rotations = rotations[angles < angle_thresh]
+    return rotations
 
 
 class ToothDataset(Dataset):
