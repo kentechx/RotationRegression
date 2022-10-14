@@ -89,6 +89,18 @@ def generate_rotations(delta_angle=10., angle_thresh=None):
     return rotations
 
 
+def sample_rotations(n, angle_thre=None):
+    if angle_thre is None:
+        return Rotation.random(n).as_matrix()
+
+    rots = np.zeros((0, 3, 3))
+    while len(rots) < n:
+        _rots = Rotation.random(int(n * 180 / angle_thre)).as_matrix()
+        angles = np.arccos(((_rots.diagonal(axis1=1, axis2=2).sum(-1) - 1.) / 2.).clip(-1., 1.)) * 180 / np.pi  # (n, )
+        rots = np.concatenate([_rots[angles < angle_thre], rots], axis=0)
+    return rots[:n]
+
+
 class ToothDataset(Dataset):
     test_scenes = ['1801_2000', '2001_2175']
 
@@ -201,6 +213,9 @@ class LitModel(pl.LightningModule):
         self.train_rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
         self.val_rot_idx = np.random.RandomState(42).choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
 
+        # augmentation
+        self.rand_rot_list = [[], sample_rotations(1000, 20), sample_rotations(1000, 5)]
+
         # network
         self.encoder = Encoder(input_channels, n_encode_embed)
 
@@ -274,7 +289,9 @@ class LitModel(pl.LightningModule):
 
         if rot_i > 0:
             # rotate rots
-            rots = rots @ rot_y[:, None]
+            aug_rot = torch.tensor(self.rand_rot_list[rot_i][batch_idx % len(self.rand_rot_list[rot_i])],
+                                   device=rot_y.device, dtype=torch.float32)
+            rots = rots @ rot_y[:, None] @ aug_rot
         return rots
 
     def training_step(self, batch, batch_idx):
@@ -325,6 +342,7 @@ class LitModel(pl.LightningModule):
 
     def on_train_epoch_end(self) -> None:
         self.train_rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
+        self.rand_rot_list = [[], sample_rotations(1000, 20), sample_rotations(1000, 5)]
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.net.parameters())
