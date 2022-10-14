@@ -187,16 +187,17 @@ class Encoder(nn.Module):
 
 class LitModel(pl.LightningModule):
 
-    def __init__(self, epochs, batch_size, lr, num_pts, num_workers):
+    def __init__(self, input_channels, n_encode_embed, epochs, batch_size, lr, num_pts, num_workers):
         super().__init__()
         self.save_hyperparameters()
 
         # rotations
-        self.rot_list_probs = [0.2, 0.3, 0.5]
+        self.rot_list_probs = [1.]
         self.rot_list = nn.ParameterList([
             nn.Parameter(torch.tensor(generate_rotations(20.), dtype=torch.float32), requires_grad=False),
-            nn.Parameter(torch.tensor(generate_rotations(5., 40), dtype=torch.float32), requires_grad=False),
-            nn.Parameter(torch.tensor(generate_rotations(1.5, 10), dtype=torch.float32), requires_grad=False)])
+            # nn.Parameter(torch.tensor(generate_rotations(5., 40), dtype=torch.float32), requires_grad=False),
+            # nn.Parameter(torch.tensor(generate_rotations(1.5, 10), dtype=torch.float32), requires_grad=False)
+        ])
         self.rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
 
         # network
@@ -241,8 +242,10 @@ class LitModel(pl.LightningModule):
         ys = []
         for bi in range(rot_y.shape[0]):
             angles = angle_diff(rots[bi], torch.tile(rot_y[[bi]], (rots.shape[1], 1, 1)))
-            y = torch.exp(-(angles - angles.min()) ** 2 / (1. ** 2))
-            y = y / y.sum()
+            # y = torch.exp(-(angles - angles.min()) ** 2 / (1. ** 2))
+            # y = y / y.sum()
+            y = torch.zeros_like(angles)
+            y[angles.argmin()] = 1.
             ys.append(y)
         ys = torch.stack(ys)
         return ys
