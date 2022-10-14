@@ -192,13 +192,14 @@ class LitModel(pl.LightningModule):
         self.save_hyperparameters()
 
         # rotations
-        self.rot_list_probs = [1.]
+        self.rot_list_probs = [0.25, 0.25, 0.5]
         self.rot_list = nn.ParameterList([
             nn.Parameter(torch.tensor(generate_rotations(20.), dtype=torch.float32), requires_grad=False),
-            # nn.Parameter(torch.tensor(generate_rotations(5., 40), dtype=torch.float32), requires_grad=False),
-            # nn.Parameter(torch.tensor(generate_rotations(1.5, 10), dtype=torch.float32), requires_grad=False)
+            nn.Parameter(torch.tensor(generate_rotations(5., 40), dtype=torch.float32), requires_grad=False),
+            nn.Parameter(torch.tensor(generate_rotations(1.5, 10), dtype=torch.float32), requires_grad=False)
         ])
-        self.rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
+        self.train_rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
+        self.val_rot_idx = np.random.RandomState(42).choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
 
         # network
         self.encoder = Encoder(input_channels, n_encode_embed)
@@ -250,8 +251,11 @@ class LitModel(pl.LightningModule):
         ys = torch.stack(ys)
         return ys
 
-    def get_rots(self, rot_y, batch_idx):
-        rot_i = self.rot_idx[batch_idx % len(self.rot_idx)]
+    def get_rots(self, rot_y, batch_idx, train=True):
+        if train:
+            rot_i = self.train_rot_idx[batch_idx % len(self.train_rot_idx)]
+        else:
+            rot_i = self.val_rot_idx[batch_idx % len(self.val_rot_idx)]
         rots = torch.tile(self.rot_list[rot_i], (rot_y.shape[0], 1, 1, 1))  # (B, N, 3, 3)
 
         if rot_i > 0:
@@ -261,7 +265,7 @@ class LitModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         xyz, normals, rot_y, tid, fp = batch
-        rots = self.get_rots(rot_y, batch_idx)
+        rots = self.get_rots(rot_y, batch_idx, True)
         ys = self.get_y(rots, rot_y)
         pred, _ = self(xyz, normals, rots)
         pred = pred[:, 0]
@@ -281,14 +285,13 @@ class LitModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         xyz, normals, rot_y, tid, fp = batch
-        rots = self.get_rots(rot_y, batch_idx)
+        rots = self.get_rots(rot_y, batch_idx, False)
         ys = self.get_y(rots, rot_y)
         pred, _ = self(xyz, normals, rots)
         pred = pred[:, 0]
         loss = F.cross_entropy(pred, ys)
 
         rot_pred = rots[torch.arange(pred.shape[0]), pred.argmax(1)]
-        # rot_y_ = rots[:, ys.argmax(1)][:, 0]
         angles = angle_diff(rot_pred, rot_y)
         self.val_angle_geodesic(rot_pred, rot_y)
         self.val_acc(pred.argmax(1), ys.argmax(1))
@@ -297,8 +300,8 @@ class LitModel(pl.LightningModule):
         self.log("val_acc", self.val_acc, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("val_loss", loss, prog_bar=True, batch_size=self.hparams['batch_size'])
 
-    def on_epoch_end(self) -> None:
-        self.rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
+    def on_train_epoch_end(self) -> None:
+        self.train_rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.net.parameters())
