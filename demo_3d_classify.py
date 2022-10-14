@@ -219,7 +219,7 @@ class LitModel(pl.LightningModule):
 
         # metrics
         self.train_angle_geodesic = AngleGeodesic()
-        self.tran_acc = torchmetrics.Accuracy()
+        self.train_acc = torchmetrics.Accuracy()
         self.val_angle_geodesic = AngleGeodesic()
         self.val_acc = torchmetrics.Accuracy()
 
@@ -271,10 +271,10 @@ class LitModel(pl.LightningModule):
         # rot_y_ = rots[:, ys.argmax(1)][:, 0]
         angles = angle_diff(rot_pred, rot_y)
         self.train_angle_geodesic(rot_pred, rot_y)
-        self.tran_acc(pred.argmax(1), ys.argmax(1))
+        self.train_acc(pred.argmax(1), ys.argmax(1))
         self.log("angle_diff", self.train_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
-        self.log("acc", self.tran_acc, prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("acc", self.train_acc, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("loss", loss, batch_size=self.hparams['batch_size'])
         self.log("lr", self.trainer.optimizers[0].param_groups[0]["lr"])
         return loss
