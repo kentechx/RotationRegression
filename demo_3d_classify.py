@@ -170,6 +170,21 @@ class AngleGeodesic(torchmetrics.Metric):
         return self.angle_geodesic / self.total
 
 
+class Encoder(nn.Module):
+
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_channels, out_channels),
+            nn.LeakyReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        x = self.net(x)
+        x = torch.max(x, dim=2)[0]
+        return x
+
+
 class LitModel(pl.LightningModule):
 
     def __init__(self, epochs, batch_size, lr, num_pts, num_workers):
@@ -185,11 +200,13 @@ class LitModel(pl.LightningModule):
         self.rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
 
         # network
+        self.encoder = Encoder(input_channels, n_encode_embed)
+
         args = type('', (), {})()
         args.k = 64
         args.dynamic = True
         args.use_stn = False
-        args.input_channels = num_pts * 3
+        args.input_channels = n_encode_embed
         args.output_channels = 1
         args.n_edgeconvs_backbone = 3
         args.edgeconv_channels = [64, 64, 64]
@@ -206,11 +223,18 @@ class LitModel(pl.LightningModule):
         self.val_acc = torchmetrics.Accuracy()
 
     def forward(self, xyz, normals, rots):
-        xyz = torch.tile(xyz.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)
-        # normals = torch.tile(normals.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)
-        # x = torch.cat([xyz.view(xyz.shape[0], xyz.shape[1], -1),
-        #                normals.view(normals.shape[0], normals.shape[1], -1)], dim=2).transpose(1, 2)
-        x = xyz.view(xyz.shape[0], xyz.shape[1], -1).transpose(1, 2).contiguous()
+        if self.hparams.input_channels == 3:
+            x = torch.tile(xyz.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)  # (B, n_rots, n_pts, 3)
+        elif self.hparams.input_channels == 6:
+            xyz = torch.tile(xyz.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)  # (B, n_rots, n_pts, 3)
+            normals = torch.tile(normals.unsqueeze(1), (1, rots.shape[1], 1, 1)) @ rots.transpose(2, 3)
+            x = torch.cat([xyz, normals], dim=-1)
+        else:
+            raise ValueError
+
+        x = self.encoder(x)
+        x = x.transpose(1, 2)  # (B, n_encode_embed, n_rots)
+        # x = xyz.view(xyz.shape[0], xyz.shape[1], -1).transpose(1, 2).contiguous()
         return self.net(x)
 
     def get_y(self, rots, rot_y):
@@ -241,7 +265,7 @@ class LitModel(pl.LightningModule):
         loss = F.cross_entropy(pred, ys)
 
         rot_pred = rots[:, pred.argmax(1)][:, 0]
-        rot_y = rots[:, ys.argmax(1)][:, 0]
+        # rot_y_ = rots[:, ys.argmax(1)][:, 0]
         angles = angle_diff(rot_pred, rot_y)
         self.train_angle_geodesic(rot_pred, rot_y)
         self.tran_acc(pred.argmax(1), ys.argmax(1))
@@ -261,7 +285,7 @@ class LitModel(pl.LightningModule):
         loss = F.cross_entropy(pred, ys)
 
         rot_pred = rots[:, pred.argmax(1)][:, 0]
-        rot_y = rots[:, ys.argmax(1)][:, 0]
+        # rot_y_ = rots[:, ys.argmax(1)][:, 0]
         angles = angle_diff(rot_pred, rot_y)
         self.val_angle_geodesic(rot_pred, rot_y)
         self.val_acc(pred.argmax(1), ys.argmax(1))
@@ -290,6 +314,8 @@ class LitModel(pl.LightningModule):
 
 
 @click.command()
+@click.option('--input_channels', default=6, type=int)
+@click.option('--n_encode_embed', default=256, type=int)
 @click.option('--epoch', default=10)
 @click.option('--batch_size', default=1)
 @click.option('--lr', default=1e-3)
@@ -309,7 +335,8 @@ def run(**kwargs):
     debug = False
     debug_args = {'limit_train_batches': 10, "limit_val_batches": 10} if debug else {}
 
-    model = LitModel(kwargs['epoch'], kwargs['batch_size'], kwargs['lr'], kwargs['num_pts'], kwargs['num_workers'])
+    model = LitModel(kwargs['input_channels'], kwargs['n_encode_embed'], kwargs['epoch'], kwargs['batch_size'],
+                     kwargs['lr'], kwargs['num_pts'], kwargs['num_workers'])
     callback = ModelCheckpoint(save_last=True)
     trainer = pl.Trainer(logger, accelerator='gpu', max_epochs=kwargs["epoch"], callbacks=[callback], **debug_args)
 
