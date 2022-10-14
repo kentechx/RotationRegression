@@ -239,6 +239,20 @@ class LitModel(pl.LightningModule):
         # x = xyz.view(xyz.shape[0], xyz.shape[1], -1).transpose(1, 2).contiguous()
         return self.net(x)
 
+    def forward_test(self, xyz, normals):
+        ret = torch.eye(3, device=xyz.device).unsqueeze(0).repeat(xyz.shape[0], 1, 1)
+        for rots in self.rot_list:
+            rots = torch.tile(rots, (xyz.shape[0], 1, 1, 1))
+            out, _ = self(xyz, normals, rots)
+            out = out.squeeze(1)
+            rot_pred = rots[torch.arange(xyz.shape[0]), out.argmax(dim=1)]
+            xyz = xyz @ rot_pred.transpose(1, 2)
+            normals = normals @ rot_pred.transpose(1, 2)
+
+            ret = rot_pred @ ret
+
+        return ret
+
     def get_y(self, rots, rot_y):
         ys = []
         for bi in range(rot_y.shape[0]):
@@ -285,6 +299,15 @@ class LitModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         xyz, normals, rot_y, tid, fp = batch
+        rot_pred = self.forward_test(xyz, normals)
+
+        angles = angle_diff(rot_pred, rot_y)
+        self.val_angle_geodesic(rot_pred, rot_y)
+        self.log("val_angle_diff", self.val_angle_geodesic, prog_bar=True, batch_size=self.hparams['batch_size'])
+        self.log("val_angle_diff_max", angles.max(), prog_bar=True, batch_size=self.hparams['batch_size'])
+
+    def _validation_step(self, batch, batch_idx):
+        xyz, normals, rot_y, tid, fp = batch
         rots = self.get_rots(rot_y, batch_idx, False)
         ys = self.get_y(rots, rot_y)
         pred, _ = self(xyz, normals, rots)
@@ -323,11 +346,11 @@ class LitModel(pl.LightningModule):
 @click.option('--input_channels', default=6, type=int)
 @click.option('--n_encode_embed', default=256, type=int)
 @click.option('--epoch', default=10)
-@click.option('--batch_size', default=1)
+@click.option('--batch_size', default=2)
 @click.option('--lr', default=1e-3)
 @click.option('--num_pts', default=1024)
 @click.option('--num_workers', default=4)
-@click.option('--version', default='demo_3d_cls')
+@click.option('--version', default='0')
 def run(**kwargs):
     print(colored(json.dumps(kwargs, indent=2), 'blue'))
 
