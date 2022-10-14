@@ -270,6 +270,9 @@ class LitModel(pl.LightningModule):
         self.log("val_acc", self.val_acc, prog_bar=True, batch_size=self.hparams['batch_size'])
         self.log("val_loss", loss, prog_bar=True, batch_size=self.hparams['batch_size'])
 
+    def on_epoch_end(self) -> None:
+        self.rot_idx = np.random.choice(len(self.rot_list), 1000000, p=self.rot_list_probs)
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.net.parameters())
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
