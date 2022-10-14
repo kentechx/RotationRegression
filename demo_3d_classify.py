@@ -267,7 +267,7 @@ class LitModel(pl.LightningModule):
         pred = pred[:, 0]
         loss = F.cross_entropy(pred, ys)
 
-        rot_pred = rots[:, pred.argmax(1)][:, 0]
+        rot_pred = rots[torch.arange(pred.shape[0]), pred.argmax(1)]
         # rot_y_ = rots[:, ys.argmax(1)][:, 0]
         angles = angle_diff(rot_pred, rot_y)
         self.train_angle_geodesic(rot_pred, rot_y)
@@ -287,7 +287,7 @@ class LitModel(pl.LightningModule):
         pred = pred[:, 0]
         loss = F.cross_entropy(pred, ys)
 
-        rot_pred = rots[:, pred.argmax(1)][:, 0]
+        rot_pred = rots[torch.arange(pred.shape[0]), pred.argmax(1)]
         # rot_y_ = rots[:, ys.argmax(1)][:, 0]
         angles = angle_diff(rot_pred, rot_y)
         self.val_angle_geodesic(rot_pred, rot_y)
